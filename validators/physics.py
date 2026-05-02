@@ -142,6 +142,12 @@ def default_simulator(req: SimRequest) -> SimResult:
 
         model = mujoco.MjModel.from_xml_string(xml)
         data = mujoco.MjData(model)
+        # If you ever inspect data.xpos / data.xquat *before* the first
+        # mj_step, call `mujoco.mj_forward(model, data)` first — MjData reads
+        # body poses from the XML but doesn't propagate them into xpos/xquat
+        # until forward kinematics runs. The step loop below covers that for
+        # this function, but readers borrowing this code in another context
+        # have hit the trap (see scripts/record_gravity_videos.py).
 
         n_steps = int(round(req.duration_s / model.opt.timestep))
         for _ in range(n_steps):
