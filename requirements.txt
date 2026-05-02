@@ -1,0 +1,6 @@
+trimesh[easy]>=4.0
+manifold3d>=2.5
+numpy>=1.24
+mujoco>=3.2
+pyserial>=3.5
+pytest>=7.0

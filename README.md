@@ -1,16 +1,27 @@
 # llm-3dprint-anything
 
-A generic Claude skill that takes a natural-language description of any object, validates whether it is physically and geometrically viable, generates OpenSCAD source, slices it to G-code, and sends the job to a 3D printer over USB serial.
+A generic Claude skill that takes a natural-language description of any object,
+validates whether it is physically and geometrically viable, generates OpenSCAD
+source, slices it to G-code, and sends the job to a 3D printer over USB serial.
 
-> Status: **early scaffolding.** This README captures the design rationale and the research that informed it, so the implementation can be built against an explicit problem statement rather than improvised.
+> Status: **end-to-end implemented except the final hardware handoff.**
+> 191/191 tests pass. Real OpenSCAD drives Stages 1–3 against the smoke-test
+> design; Stages 4–5 are implemented with pluggable backends but the real
+> PrusaSlicer binary and real printer have not been exercised yet — see
+> [Pending](#pending) below.
 
 ---
 
 ## Why this exists
 
-Existing 3D-printing skills on the marketplace (e.g. `flowful-ai/cad-skill`, `stigsb-devais/cad-skill`, `select-print-material`) handle **manufacturability** — wall thickness, overhangs, watertight mesh, material choice. They assume the *concept* is already physically coherent.
+Existing 3D-printing skills on the marketplace (e.g. `flowful-ai/cad-skill`,
+`stigsb-devais/cad-skill`, `select-print-material`) handle **manufacturability**
+— wall thickness, overhangs, watertight mesh, material choice. They assume the
+*concept* is already physically coherent.
 
-The gap: nothing checks whether the **object as described** obeys real-world physics and design viability *before* CAD work begins. Examples of failures a manufacturability skill won't catch:
+The gap: nothing checks whether the **object as described** obeys real-world
+physics and design viability *before* CAD work begins. Examples of failures a
+manufacturability skill won't catch:
 
 - A "cup" with no closed bottom.
 - A hinge with no defined axis of rotation.
@@ -18,8 +29,12 @@ The gap: nothing checks whether the **object as described** obeys real-world phy
 - Two parts described as separate but occupying the same volume.
 - A center of mass outside the support footprint (object falls over).
 - Threads that don't mate; assembly steps that aren't physically possible.
+- A plastic part loaded above its glass-transition temperature.
+- A pressurized vessel whose hoop stress exceeds yield.
+- A slender column buckling under axial load before it yields.
 
-This skill is meant to sit **upstream** of the existing CAD skills as a pre-CAD viability gate, then drive the full pipeline through to the physical print.
+This skill sits **upstream** of existing CAD skills as a pre-CAD viability
+gate, then drives the full pipeline through to the physical print.
 
 ---
 
@@ -29,107 +44,227 @@ This skill is meant to sit **upstream** of the existing CAD skills as a pre-CAD 
 natural-language description
         │
         ▼
-┌─────────────────────────┐
-│ 1. Interview & Checklist│  ← LLM (this skill)
-│    physical viability   │
-└──────────┬──────────────┘
+┌───────────────────────────────┐
+│ 1. Interview & Checklist      │  ← LLM (SKILL.md)
+│    physical viability         │
+└──────────┬────────────────────┘
            │ pass / revise
            ▼
-┌─────────────────────────┐
-│ 2. OpenSCAD generation  │  ← LLM + scad templates
-└──────────┬──────────────┘
+┌───────────────────────────────┐
+│ 2. OpenSCAD generation        │  ← LLM + intent annotations
+└──────────┬────────────────────┘
            │ .scad
            ▼
-┌─────────────────────────┐
-│ 3. Geometric validation │  ← deterministic tools
-│    (Trimesh, CadQuery)  │     (interpenetration,
-│                         │      mesh integrity, COM)
-└──────────┬──────────────┘
-           │ STL
+┌───────────────────────────────┐
+│ 3. Geometric + physics + heat │  ← orchestrator + validators/
+│    & pressure validation      │     (real OpenSCAD, MuJoCo, trimesh)
+└──────────┬────────────────────┘
+           │ STL + Report
            ▼
-┌─────────────────────────┐
-│ 4. Slice to G-code      │  ← PrusaSlicer / CuraEngine CLI
-└──────────┬──────────────┘
+┌───────────────────────────────┐
+│ 4. Slice to G-code            │  ← slicer/ → PrusaSlicer CLI
+└──────────┬────────────────────┘
            │ .gcode
            ▼
-┌─────────────────────────┐
-│ 5. USB serial transport │  ← pyserial / printrun
-└─────────────────────────┘
+┌───────────────────────────────┐
+│ 5. USB serial transport       │  ← transport/ → pyserial / Marlin protocol
+└───────────────────────────────┘
 ```
 
 ---
 
-## Design principle: hybrid skill, not pure prompt
+## What's implemented
 
-Recent benchmarks (2025–2026) show frontier LLMs are unreliable at 3D geometric and physical computation:
-
-- **GeoGramBench** — frontier LLMs score **<50%** on the hardest abstraction level of geometric-program reasoning.
-- **PHYBench** — physics symbolic-derivation, similar gap.
-- **FEM-Bench** — finite element method coding, exposes consistent deficiencies in scientific computing.
-
-Therefore the skill is a **triage nurse, not a doctor**: the LLM runs the rule book and the interview; deterministic tools do the geometry kernel work.
-
-| Check | Owner | How |
+| Layer | Module | Purpose |
 |---|---|---|
-| Functional coherence ("cup with no bottom") | LLM | Checklist questioning |
-| Scale / proportion sanity (wall vs. span, nozzle limits) | LLM | Lookup-table heuristics |
-| Interpenetration of described volumes | **Tool** | CadQuery / Trimesh boolean intersection |
-| Mesh integrity (non-manifold, watertight) | **Tool** | Trimesh / MeshLib |
-| Static stability (COM over support polygon) | **Tool** | Python: project COM, check vs. convex hull of contacts |
-| Cantilever / structural load | **Tool or punt** | Beam-equation back-of-envelope, or flag for FEA |
-| Assembly feasibility / motion | LLM | Verbal walkthrough |
-| Clearance / fit between mating parts | **Tool** | Boolean with offset (clearance distance) |
+| Stage 1 (rule book) | [SKILL.md](SKILL.md) | LLM-facing interview script, intent-annotation grammar, render-then-verify loop, deterministic-vs-`[INFER]` reporting discipline |
+| Stage 2 → 3 (orchestration) | [orchestrator/](orchestrator/) | Parses SCAD intent annotations, renders modules to STL via real OpenSCAD, drives the validator sequence, returns a `Report` |
+| Stage 3 (validators) | [validators/](validators/) | Twelve deterministic checks across mesh integrity, clash, fit, stability, physics, structural, thermal — each returns `Verdict` objects with stable rule keys |
+| Stage 4 (slice) | [slicer/](slicer/) | PrusaSlicer CLI wrapper with per-material profiles (PLA, PETG, ABS); pluggable for testing |
+| Stage 5 (transport) | [transport/](transport/) | Marlin/Klipper line-numbered protocol with checksum, pluggable Transport (pyserial-backed `SerialTransport` or fake) |
+
+### Validator catalogue
+
+Every validator below returns a `Verdict` (or list of them); the
+`Report.to_text()` aggregator the LLM surfaces verbatim is in
+[validators/report.py](validators/report.py).
+
+| Validator | What it answers | Key formula / approach |
+|---|---|---|
+| `check_mesh_integrity` | Is the STL slicer-ready? | Watertight, winding-consistent, non-manifold-edge counts (Trimesh) |
+| `check_hard_clash` | Do any two parts interpenetrate unintentionally? | AABB pre-filter → boolean intersection (manifold3d), with whitelist & noise threshold |
+| `check_clearance` | Do mating parts have the right gap for their fit class (RC/LC/LT/LN/FN)? | Vertex-sampled signed distance, FDM-adjusted clearance table |
+| `check_static_stability` | Will the assembly tip over? | COM projection vs. convex hull of bed-contact vertices |
+| `check_grounded` | Is every connected component supported? | Per-component lowest-vertex distance from bed plane |
+| `check_settles_under_gravity` | Does each part stay put in a real physics sim? | MuJoCo headless rigid-body sim, drift > 1 mm or rotation > 5° → WARN |
+| `check_cantilever` | Will a beam yield under a tip load? | Euler–Bernoulli σ = F·L / S |
+| `check_buckling` | Will a slender column collapse under axial compression? | Euler P_critical = π²·E·I / (K·L)² |
+| `check_pressure_vessel` | Will a printed container rupture? | Thin-wall hoop stress σ = P·r / t |
+| `check_operating_temperature` | Does the material hold up at the operating temperature? | Static lookup vs. material's HDT and Tg |
+
+### Material data
+
+Single source of truth at [validators/materials.py](validators/materials.py).
+PLA, PETG, ABS, with yield, Young's modulus, glass transition (Tg), heat
+deflection (HDT), CTE, density. New materials are a one-line addition.
+
+### Annotations the LLM writes into SCAD
+
+```scad
+// part: <name>
+// fit: <a>~<b> class=<RC|LC|LT|LN|FN>
+// clash_whitelist: <a>~<b>
+// gravity: <-x|+x|-y|+y|-z|+z>
+// bed_z: <value>
+// operating: temp_c=<N>
+// load: part=<name> force=<N> axis=<axis> length_mm=<L> section=<spec> [material=...]
+// buckling: part=<name> axial_n=<F> length_mm=<L> section=<spec> [material=...] [end_condition=...]
+// pressure: part=<name> internal_pa=<P> wall_thickness_mm=<t> radius_mm=<r> [material=...]
+```
+
+`<spec>` is `rect:<W>x<H>` or `round:<D>` in mm. The orchestrator's parser
+([orchestrator/annotations.py](orchestrator/annotations.py)) maps each
+annotation to a validator call automatically — the LLM never invokes
+validators directly.
 
 ---
 
-## Research: how other disciplines handle 3D-model validation
+## Quick start
 
-The following survey informed the skill's architecture. Every column of the table above borrows from a discipline that already solved a piece of the problem.
+```bash
+# one-time setup (Python 3.10+, real OpenSCAD recommended)
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+brew install openscad      # macOS; Linux/Windows: install OpenSCAD via your package manager
 
-### 1. House architecture / construction — BIM clash detection
+# run the test suite
+.venv/bin/pytest tests/
 
-A ~20-year-old discipline. Tools (Navisworks, Solibri, Revizto) load a federated 3D model and run three types of checks:
+# end-to-end smoke test on the canonical peg-in-hole assembly
+.venv/bin/python -c "
+from pathlib import Path
+from orchestrator import run_pipeline
+print(run_pipeline(Path('examples/peg_in_hole.scad'),
+                   work_dir=Path('scratch/smoke')).to_text())
+"
+```
 
-- **Hard clash** — actual geometry intersection ("two volumes in the same space").
-- **Soft / clearance clash** — within a tolerance distance (e.g. an insulated pipe needs N mm of gap).
-- **Workflow clash** — temporal conflicts (installation order).
-
-Solibri is **rule-based** (named rules over geometry+metadata); Navisworks is **geometry-intersect**. Active ML research on "clash relevance" filtering exists because raw clash detection produces thousands of false positives.
-
-**Lesson borrowed:** the hard / clearance / workflow taxonomy maps directly onto our checklist categories. The rule-based model fits an LLM checklist well.
-
-### 2. Industrial / mechanical design — tolerance analysis + interference fits
-
-Validation is split into two passes:
-
-- **Tolerance stack-ups** — worst-case (arithmetic) or statistical (RSS / Monte Carlo) to predict whether parts fit across manufacturing variation.
-- **Interference detection** — boolean intersection between mating parts in CAD; classified as clearance / transition / interference fit.
-
-Stress and structural viability is a *separate* tool (FEA — finite element analysis), not part of interference checking.
-
-**Lesson borrowed:** "does it fit" and "will it hold" are **different checks** with different tools. The skill keeps them as distinct stages.
-
-### 3. Video games — mesh integrity + runtime colliders
-
-Two layers:
-
-- **Mesh integrity** — non-manifold edges, duplicate vertices, isolated geometry, inconsistent normals. Done once at import; libraries (MeshLib, Open3D, Trimesh) do this deterministically.
-- **Runtime collision** — uses simplified colliders (AABB, OBB, sphere, GJK, BVH) — *not* the visible mesh. Game "physics" is an approximation built from primitives, not real-world physics.
-
-**Lesson borrowed:** mesh-integrity checks are cheap, deterministic, and 100% solvable — they belong in a tool call, not a prompt. The skill never asks the LLM to reason about non-manifold edges.
-
-### 4. LLM physical reasoning — current limits
-
-- **GeoGramBench** — frontier LLMs <50% on the hardest abstraction level of geometric-program reasoning.
-- **PHYBench** — physics symbolic-derivation, similar gap.
-- **FEM-Bench** — finite element coding, consistent deficiencies in scientific computing.
-- **EquiLLM** — research bolting E(3)-equivariant encoders onto LLMs precisely because raw LLMs are weak at 3D.
-
-**Lesson borrowed:** the LLM is the interviewer and rule-book reader, not the geometry kernel. Every numerical answer is delegated to a tool.
+The smoke test prints a deterministic Report. The
+[examples/peg_in_hole.scad](examples/peg_in_hole.scad) design is a peg
+that goes up through a flat plate's hole with a 0.25 mm radial clearance
+fit (LC class). The validator measures that clearance from the rendered
+geometry, not from the SCAD constants.
 
 ---
 
-## Sources
+## Design principle
+
+Recent benchmarks (2025–2026) show frontier LLMs are unreliable at 3D
+geometric and physical computation:
+
+- **GeoGramBench** — frontier LLMs score **<50%** on the hardest abstraction
+  level of geometric-program reasoning.
+- **PHYBench** — best model 36.9% vs. expert humans 61.9% on Olympiad-grade
+  physics problems.
+- **FEM-Bench** — consistent deficiencies in scientific computing.
+
+Therefore the skill is a **triage nurse, not a doctor**: the LLM runs the rule
+book and the interview; deterministic tools do the geometry kernel work. Every
+numerical claim that flows back to the user is tagged `[OK]`/`[WARN]`/`[BLOCK]`
+(came from a tool) or `[INFER]` (LLM judgement) — never both.
+
+A second invariant runs through the codebase: every external-binary boundary
+(OpenSCAD, PrusaSlicer, MuJoCo, pyserial) is **pluggable** so unit tests run
+without the binary installed, and so future contributors can swap engines
+(e.g., CuraEngine instead of PrusaSlicer) without touching the validator core.
+
+The "fit vs. hold" split (interference checking is a different stage from
+structural analysis) and the studies-driven research — distilled in
+[studies/](studies/) — are the load-bearing architectural decisions; read those
+before changing a validator.
+
+---
+
+## Pending
+
+### Hardware not yet connected
+
+- **Real printer.** [transport/SerialTransport](transport/streamer.py) is
+  implemented and unit-tested against a programmable fake transport (resends,
+  errors, timeouts, M110 reset, banner skipping). It has *not* been exercised
+  against an actual Marlin/Klipper printer over USB. Will happen when the
+  printer is plugged in.
+- **PrusaSlicer binary.** [slicer/](slicer/) is implemented and unit-tested:
+  the CLI argument composer is verified directly, and `slice_stl` works
+  end-to-end against an injected fake slicer. The real `prusa-slicer` binary
+  was not installed during the smoke test (the system-wide `brew install
+  --cask prusaslicer` was declined as out of scope). To complete that half:
+  `brew install --cask prusaslicer` (~150 MB) and re-run the smoke test.
+
+### Documented v1 limitations (each pinned in module docstrings)
+
+- `check_mesh_integrity` — non-manifold *vertex* and *self-intersection* detection
+  deferred until a MeshLib / manifold3d backend is wired in. Edges are covered.
+- `check_grounded` — flags components that don't touch the bed; doesn't yet
+  detect a component supported by *another part* (a screw resting on a
+  flange). Work-around: model interlocking parts as a single watertight mesh.
+- `check_settles_under_gravity` — convex-hull collision for dynamic bodies
+  (lossy on non-convex parts). Default `inter_part_collision=False` to avoid
+  false positives on peg-in-hole geometry. `default_simulator` is z-axis-only.
+- `check_cantilever` — point load at the tip only.
+- `check_buckling` — single concentric axial load, ideal columns.
+- `check_pressure_vessel` — thin-wall hoop stress only (valid when wall < radius/10).
+- `check_operating_temperature` — static lookup against HDT and Tg only;
+  transient thermal stress, creep over time, and coupled thermo-mechanical
+  analysis are out of scope (need real FEA).
+- `transport/` — no M105 keepalive thread (relies on `response_timeout_s`).
+  No flow control beyond the per-line ack. No pause/resume.
+
+### Open questions tracked in [studies/05](studies/05-synthesis-and-skill-spec.md)
+
+- FDM-specific clearance calibration kit so users can dial in their printer's actual gap behavior.
+- Vision-augmented validation (multi-view render → LLM consistency check).
+- Boolean library robustness comparison (Trimesh / CadQuery / manifold3d) for production workloads.
+- End-to-end evaluation harness: prompt → final printed object → human grade.
+
+### Development notes
+
+- **PyBullet did not build** on Python 3.12 + macOS arm64 (`_stdio.h:322`
+  macro clash in the Apple SDK; PyBullet ships no wheels). Switched to
+  **MuJoCo** which has prebuilt arm64 wheels and is genuinely a better fit
+  (DeepMind quality contact dynamics). If PyBullet ever ships wheels for this
+  platform, the pluggable-simulator pattern means swapping back is a one-file
+  change in [validators/physics.py](validators/physics.py).
+- **OpenSCAD module isolation** — initially the renderer used `include
+  <file>`, which executes top-level code. Per-part renders therefore included
+  the file's `assembly();` call and produced full-assembly STLs every time.
+  Fixed by switching to `use <file>` (definitions only). Convention: every
+  `// part:` module must be defined at its **final assembly position** —
+  documented in [SKILL.md](SKILL.md) and the
+  [example file header](examples/peg_in_hole.scad).
+- **Test counts**: 191/191 passing as of 2026-05-02, runtime ~1 s. Real-MuJoCo
+  integration tests run in `tests/test_physics.py`; everything else uses
+  injected fakes for the external-binary boundaries.
+
+---
+
+## Research
+
+A discipline-by-discipline survey informed every validator's design. The full
+distillation lives in [studies/](studies/); a one-line summary per discipline:
+
+- **BIM clash detection** ([studies/01](studies/01-bim-clash-detection.md))
+  → hard / clearance / workflow taxonomy; named-rule structure; false-positive whitelisting.
+- **Mechanical tolerance & fits** ([studies/02](studies/02-tolerance-and-fits.md))
+  → fit-class vocabulary (RC/LC/LT/LN/FN); fit-vs-hold split; FDM-adjusted clearance table.
+- **Mesh integrity & collision** ([studies/03](studies/03-mesh-integrity-and-collision.md))
+  → broad/narrow-phase; non-manifold defect taxonomy; loud auto-repair.
+- **LLM physical-reasoning limits** ([studies/04](studies/04-llm-physical-reasoning-limits.md))
+  → empirical justification for the LLM-as-checklist split; routing rules.
+- **Synthesis** ([studies/05](studies/05-synthesis-and-skill-spec.md))
+  → routing table, validator API sketches, SKILL.md skeleton, open-questions list.
+
+### Sources
 
 - [All About Clash Detection with Navisworks (United-BIM)](https://www.united-bim.com/get-to-know-all-about-clash-detection-with-navisworks/)
 - [MEP Coordination in BIM Using Revit, Navisworks, and Solibri (Vavetek)](https://vavetek.ai/blog/mep-coordination-in-bim-revit-navisworks-solibri/)
@@ -144,29 +279,36 @@ Two layers:
 - [PHYBench: Holistic Evaluation of Physical Perception (arXiv)](https://arxiv.org/pdf/2504.16074)
 - [FEM-Bench: Scientific Reasoning Benchmark (arXiv, 2025)](https://arxiv.org/html/2512.20732)
 
-### Related skills (already on skillsmp.com)
+### Related skills (downstream — integrate, don't reimplement)
 
-These solve adjacent problems and will plug into this pipeline downstream:
-
-- [pjt222/select-print-material](https://skillsmp.com/skills/pjt222-agent-almanac-i18n-wenyan-ultra-skills-select-print-material-skill-md) — material selection (PLA, PETG, ABS, ASA, TPU, Nylon, SLA resins) given functional and environmental requirements.
-- [stigsb-devais/cad-skill](https://skillsmp.com/skills/stigsb-devais-claude-skills-cad-skill-skill-md) — parametric CadQuery generation with printability checks (wall thickness, overhangs, watertight mesh).
-- [flowful-ai/cad-skill](https://skillsmp.com/skills/flowful-ai-cad-skill-skill-md) — same family; CadQuery + STL + multi-view previews + print recommendations.
+- [pjt222/select-print-material](https://skillsmp.com/skills/pjt222-agent-almanac-i18n-wenyan-ultra-skills-select-print-material-skill-md) — material selection (PLA, PETG, ABS, ASA, TPU, Nylon, SLA resins).
+- [stigsb-devais/cad-skill](https://skillsmp.com/skills/stigsb-devais-claude-skills-cad-skill-skill-md) — parametric CadQuery generation with printability checks.
+- [flowful-ai/cad-skill](https://skillsmp.com/skills/flowful-ai-cad-skill-skill-md) — same family; CadQuery + STL + multi-view previews.
 
 ---
 
-## Roadmap
-
-- [ ] `SKILL.md` — interview prompts, checklist categories, decision rules.
-- [ ] `validators/` — Python module: mesh integrity, interpenetration, COM stability, clearance.
-- [ ] `scad/` — OpenSCAD templates and generator wrappers.
-- [ ] `slicer/` — PrusaSlicer / CuraEngine CLI invocation with profile selection.
-- [ ] `transport/` — `pyserial`-based G-code streamer over USB serial (target: any Marlin / Klipper printer accepting line-numbered G-code with checksum).
-- [ ] End-to-end smoke test: prompt → printed object.
-
 ## Hardware target
 
-- Printer transport: **USB serial** (Marlin / Klipper-flavored G-code, line-numbered with checksum, `M105` heartbeat for keepalive).
-- Slicer: TBD (PrusaSlicer CLI is the leading candidate for headless invocation).
+- Printer transport: **USB serial**, Marlin / Klipper-flavored G-code,
+  line-numbered with checksum, `M105` heartbeat for keepalive (heartbeat is
+  pending — see [Pending](#pending)).
+- Slicer: **PrusaSlicer CLI** (headless), pluggable.
+- Tested-against firmware: none yet (no printer connected). Once connected,
+  the first targets will be Marlin 2.x and Klipper.
+
+## Roadmap
+
+- [x] `SKILL.md` — interview prompts, checklist categories, decision rules.
+- [x] `validators/` — mesh integrity, clash, fit, stability, grounded, physics, structural, buckling, pressure-vessel, thermal, plus aggregated reporting.
+- [x] `orchestrator/` — SCAD intent-annotation parser + render-then-validate pipeline.
+- [x] `slicer/` — PrusaSlicer CLI invocation with per-material profiles.
+- [x] `transport/` — Marlin/Klipper line-numbered streamer over USB serial (pyserial-backed).
+- [x] End-to-end smoke test against real OpenSCAD: validators pass on the example design.
+- [ ] End-to-end smoke test against real PrusaSlicer (binary install pending).
+- [ ] First print on a real Marlin/Klipper printer over USB.
+- [ ] M105 keepalive thread in the streamer.
+- [ ] Calibration-print routine for FDM clearance values.
+- [ ] Vision-augmented stage-3 secondary check.
 
 ## License
 
