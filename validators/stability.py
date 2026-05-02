@@ -170,7 +170,12 @@ def check_grounded(
     rule = "stability_grounded"
     axis, sign = _parse_axis(gravity_axis)
 
-    components = mesh.split(only_watertight=False)
+    # Filter internal voids: a hollow body (e.g., a bottle, a vessel) is one
+    # connected mesh, but `split()` returns its inner cavity surface as a
+    # separate component. Such cavities have inward-pointing normals, so
+    # their signed volume is negative — that's the cleanest filter.
+    raw_components = mesh.split(only_watertight=False)
+    components = [c for c in raw_components if c.volume > 0]
     n = len(components)
 
     if bed_z is None:

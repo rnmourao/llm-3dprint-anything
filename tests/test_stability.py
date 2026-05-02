@@ -198,3 +198,20 @@ def test_peg_on_bed_with_socket_above_warns():
     floating = v.evidence["floating"]
     assert len(floating) == 1
     assert floating[0]["distance_above_bed_mm"] == pytest.approx(8.0, abs=1e-6)
+
+
+def test_grounded_ignores_hollow_body_internal_cavity():
+    """Hollow bottle: a single physical part with an internal void. trimesh.split
+    returns two connected components — the outer shell and the inner cavity
+    surface — but the void isn't a real part and shouldn't trigger a "floating
+    component" WARN. Filter is by volume sign (cavities have inward normals).
+    """
+    outer = trimesh.creation.box(extents=(20, 20, 20))
+    outer.apply_translation((0, 0, 10))  # bottom at z=0
+    inner = trimesh.creation.box(extents=(16, 16, 16))
+    inner.apply_translation((0, 0, 10))  # entirely inside outer
+    hollow = outer.difference(inner)
+
+    v = check_grounded(hollow)
+    assert v.severity is Severity.PASS, v.message
+    assert v.evidence["components"] == 1  # the void is filtered out
