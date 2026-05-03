@@ -4,11 +4,12 @@ A generic Claude skill that takes a natural-language description of any object,
 validates whether it is physically and geometrically viable, generates OpenSCAD
 source, slices it to G-code, and sends the job to a 3D printer over USB serial.
 
-> Status: **end-to-end implemented except the final hardware handoff.**
-> 191/191 tests pass. Real OpenSCAD drives Stages 1–3 against the smoke-test
-> design; Stages 4–5 are implemented with pluggable backends but the real
-> PrusaSlicer binary and real printer have not been exercised yet — see
-> [Pending](#pending) below.
+> Status: **end-to-end on real hardware as of 2026-05-03.** 196/196 tests
+> pass. Full pipeline ran against an Ender-3 S1 Pro (Marlin 2.0.8.28F4):
+> SCAD → validators → real PrusaSlicer → 14,543 G-code lines streamed
+> over USB in 25 m, producing a peg-in-hole assembly that mated as
+> predicted by the LC fit annotation. See [Pending](#pending) for the
+> remaining v1 limitations.
 
 ---
 
@@ -132,13 +133,15 @@ validators directly.
 ## Quick start
 
 ```bash
-# one-time setup (Python 3.10+, real OpenSCAD recommended)
+# one-time setup (Python 3.10+; the three external binaries below are
+# required by stages 3–5 but are pluggable, so the test suite passes
+# without any of them).
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-brew install openscad      # macOS; Linux/Windows: install OpenSCAD via your package manager
-
-# run the test suite
-.venv/bin/pytest tests/
+brew install openscad                    # macOS; Linux/Windows: use your package manager
+brew install --cask prusaslicer          # ~150 MB; needed for stage 4
+ln -s /Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer \
+      /opt/homebrew/bin/prusa-slicer    # cask installs the .app; expose the CLI
 
 # end-to-end smoke test on the canonical peg-in-hole assembly
 .venv/bin/python -c "
@@ -154,6 +157,11 @@ The smoke test prints a deterministic Report. The
 that goes up through a flat plate's hole with a 0.25 mm radial clearance
 fit (LC class). The validator measures that clearance from the rendered
 geometry, not from the SCAD constants.
+
+For stage 5 (USB streaming), connect a Marlin/Klipper printer over USB
+and pass the resulting `/dev/cu.usb*` (or `/dev/ttyUSB*` on Linux) device
+to `transport.SerialTransport`. The first end-to-end run validated against
+an Ender-3 S1 Pro at 115200 baud.
 
 ---
 
@@ -187,19 +195,16 @@ before changing a validator.
 
 ## Pending
 
-### Hardware not yet connected
+### Recently completed (2026-05-03)
 
-- **Real printer.** [transport/SerialTransport](transport/streamer.py) is
-  implemented and unit-tested against a programmable fake transport (resends,
-  errors, timeouts, M110 reset, banner skipping). It has *not* been exercised
-  against an actual Marlin/Klipper printer over USB. Will happen when the
-  printer is plugged in.
-- **PrusaSlicer binary.** [slicer/](slicer/) is implemented and unit-tested:
-  the CLI argument composer is verified directly, and `slice_stl` works
-  end-to-end against an injected fake slicer. The real `prusa-slicer` binary
-  was not installed during the smoke test (the system-wide `brew install
-  --cask prusaslicer` was declined as out of scope). To complete that half:
-  `brew install --cask prusaslicer` (~150 MB) and re-run the smoke test.
+- ✅ **Real printer end-to-end run.** Ender-3 S1 Pro on `/dev/cu.usbserial-110`
+  at 115200 baud. 14,543 G-code lines streamed cleanly, zero resends, no errors.
+  Surfaced two production gaps that are now fixed: `SliceProfile` lacked
+  first-layer temperature fields (PrusaSlicer was emitting `S0` for layer-1 bed),
+  and the streamer's `response_timeout_s` was applied uniformly to `M109`/`M190`
+  (block-until-temp) commands that legitimately take minutes from cold.
+- ✅ **Real PrusaSlicer slice.** Stage 4 against the actual binary, default
+  PLA profile, 22 m PrusaSlicer estimate / 25 m actual streamed time.
 
 ### Documented v1 limitations (each pinned in module docstrings)
 
@@ -217,8 +222,11 @@ before changing a validator.
 - `check_operating_temperature` — static lookup against HDT and Tg only;
   transient thermal stress, creep over time, and coupled thermo-mechanical
   analysis are out of scope (need real FEA).
-- `transport/` — no M105 keepalive thread (relies on `response_timeout_s`).
-  No flow control beyond the per-line ack. No pause/resume.
+- `transport/` — no M105 keepalive thread (long heat-up commands now use a
+  separate `long_block_timeout_s` default of 600 s instead). No flow control
+  beyond the per-line ack. No pause/resume. Multi-part designs are still
+  unioned into one STL before slicing, so co-printed mating parts may fuse
+  if their gap is below the slicer's extrusion-width threshold.
 
 ### Open questions tracked in [studies/05](studies/05-synthesis-and-skill-spec.md)
 
@@ -242,7 +250,7 @@ before changing a validator.
   `// part:` module must be defined at its **final assembly position** —
   documented in [SKILL.md](SKILL.md) and the
   [example file header](examples/peg_in_hole.scad).
-- **Test counts**: 191/191 passing as of 2026-05-02, runtime ~1 s. Real-MuJoCo
+- **Test counts**: 196/196 passing as of 2026-05-03, runtime ~1 s. Real-MuJoCo
   integration tests run in `tests/test_physics.py`; everything else uses
   injected fakes for the external-binary boundaries.
 
@@ -290,11 +298,14 @@ distillation lives in [studies/](studies/); a one-line summary per discipline:
 ## Hardware target
 
 - Printer transport: **USB serial**, Marlin / Klipper-flavored G-code,
-  line-numbered with checksum, `M105` heartbeat for keepalive (heartbeat is
-  pending — see [Pending](#pending)).
+  line-numbered with checksum. `M109`/`M190`/`M191` (block-until-temperature)
+  use a separate `long_block_timeout_s` (default 600 s); a true `M105`
+  heartbeat thread is still pending — see [Pending](#pending).
 - Slicer: **PrusaSlicer CLI** (headless), pluggable.
-- Tested-against firmware: none yet (no printer connected). Once connected,
-  the first targets will be Marlin 2.x and Klipper.
+- Verified firmware: **Marlin 2.0.8.28F4** on a Creality Ender-3 S1 Pro
+  (build volume 220×220×270 mm, CR Touch auto-level) — first end-to-end
+  print on 2026-05-03. Klipper has not been exercised yet but uses the
+  same line-numbered protocol.
 
 ## Roadmap
 
@@ -304,9 +315,10 @@ distillation lives in [studies/](studies/); a one-line summary per discipline:
 - [x] `slicer/` — PrusaSlicer CLI invocation with per-material profiles.
 - [x] `transport/` — Marlin/Klipper line-numbered streamer over USB serial (pyserial-backed).
 - [x] End-to-end smoke test against real OpenSCAD: validators pass on the example design.
-- [ ] End-to-end smoke test against real PrusaSlicer (binary install pending).
-- [ ] First print on a real Marlin/Klipper printer over USB.
+- [x] End-to-end smoke test against real PrusaSlicer (2026-05-03).
+- [x] First print on a real Marlin/Klipper printer over USB (2026-05-03, Ender-3 S1 Pro).
 - [ ] M105 keepalive thread in the streamer.
+- [ ] Per-part STL slicing so co-printed mating parts don't fuse (today's pipeline unions the assembly into one STL).
 - [ ] Calibration-print routine for FDM clearance values.
 - [ ] Vision-augmented stage-3 secondary check.
 
