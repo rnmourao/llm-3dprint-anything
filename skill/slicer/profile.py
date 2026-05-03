@@ -12,6 +12,7 @@ overhang / wall-thickness analysis. We are only the mechanical bridge.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,11 @@ class SliceProfile:
     material: str = "PLA"
     extruder_temp_c: int = 215
     bed_temp_c: int = 60
+    # When None, the build_cli_args fallback uses the non-first-layer values.
+    # PrusaSlicer's --bed-temperature only sets layer ≥2; without the
+    # first-layer counterpart it emits S0 and the bed never preheats.
+    first_layer_extruder_temp_c: Optional[int] = None
+    first_layer_bed_temp_c: Optional[int] = None
     extra_args: tuple[str, ...] = field(default_factory=tuple)
 
 

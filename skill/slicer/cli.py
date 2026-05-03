@@ -48,6 +48,8 @@ def build_cli_args(req: SliceRequest, prusa_path: str) -> list[str]:
     actually running PrusaSlicer.
     """
     p = req.profile
+    fl_extruder = p.first_layer_extruder_temp_c if p.first_layer_extruder_temp_c is not None else p.extruder_temp_c
+    fl_bed = p.first_layer_bed_temp_c if p.first_layer_bed_temp_c is not None else p.bed_temp_c
     args = [
         prusa_path,
         "--export-gcode",
@@ -59,6 +61,8 @@ def build_cli_args(req: SliceRequest, prusa_path: str) -> list[str]:
         "--filament-type", p.material,
         "--temperature", str(p.extruder_temp_c),
         "--bed-temperature", str(p.bed_temp_c),
+        "--first-layer-temperature", str(fl_extruder),
+        "--first-layer-bed-temperature", str(fl_bed),
     ]
     args.extend(p.extra_args)
     args.append(str(req.stl_path))

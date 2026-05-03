@@ -135,3 +135,25 @@ def test_build_cli_args_infill_percent_format(tmp_path):
     req = SliceRequest(tmp_path / "in.stl", tmp_path / "out.gcode", profile)
     args = build_cli_args(req, "ps")
     assert args[args.index("--fill-density") + 1] == "35%"
+
+
+def test_build_cli_args_first_layer_temps_default_to_regular(tmp_path):
+    """Without explicit first-layer temps, fall back to the non-first values
+    (so PrusaSlicer never emits S0 for the first-layer bed/nozzle)."""
+    profile = profile_for_material("PLA")
+    req = SliceRequest(tmp_path / "in.stl", tmp_path / "out.gcode", profile)
+    args = build_cli_args(req, "ps")
+    fl_t = args[args.index("--first-layer-temperature") + 1]
+    fl_b = args[args.index("--first-layer-bed-temperature") + 1]
+    assert fl_t == str(profile.extruder_temp_c)
+    assert fl_b == str(profile.bed_temp_c)
+
+
+def test_build_cli_args_first_layer_temps_override(tmp_path):
+    profile = profile_for_material("PLA",
+                                   first_layer_extruder_temp_c=220,
+                                   first_layer_bed_temp_c=65)
+    req = SliceRequest(tmp_path / "in.stl", tmp_path / "out.gcode", profile)
+    args = build_cli_args(req, "ps")
+    assert args[args.index("--first-layer-temperature") + 1] == "220"
+    assert args[args.index("--first-layer-bed-temperature") + 1] == "65"
