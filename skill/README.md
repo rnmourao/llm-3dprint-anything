@@ -309,16 +309,18 @@ distillation lives in [studies/](studies/); a one-line summary per discipline:
 
 ## Roadmap
 
+Single source of truth: [../ROADMAP.md](../ROADMAP.md) (canonical, with dates and context). Inline summary (kept in sync manually with the root README):
+
 - [x] `SKILL.md` — interview prompts, checklist categories, decision rules.
-- [x] `validators/` — mesh integrity, clash, fit, stability, grounded, physics, structural, buckling, pressure-vessel, thermal, plus aggregated reporting.
+- [x] `validators/` — twelve deterministic checks plus aggregated reporting.
 - [x] `orchestrator/` — SCAD intent-annotation parser + render-then-validate pipeline.
 - [x] `slicer/` — PrusaSlicer CLI invocation with per-material profiles.
-- [x] `transport/` — Marlin/Klipper line-numbered streamer over USB serial (pyserial-backed).
-- [x] End-to-end smoke test against real OpenSCAD: validators pass on the example design.
+- [x] `transport/` — Marlin/Klipper line-numbered streamer over USB serial.
+- [x] End-to-end smoke test against real OpenSCAD.
 - [x] End-to-end smoke test against real PrusaSlicer (2026-05-03).
 - [x] First print on a real Marlin/Klipper printer over USB (2026-05-03, Ender-3 S1 Pro).
 - [ ] M105 keepalive thread in the streamer.
-- [ ] Per-part STL slicing so co-printed mating parts don't fuse (today's pipeline unions the assembly into one STL).
+- [ ] Per-part STL slicing so co-printed mating parts don't fuse.
 - [ ] Calibration-print routine for FDM clearance values.
 - [ ] Vision-augmented stage-3 secondary check.
 

@@ -104,6 +104,23 @@ pip install -r skill/requirements.txt   # runtime Python deps
 # point your Claude harness at skill/SKILL.md as the entry point
 ```
 
+## Roadmap
+
+Single source of truth: [ROADMAP.md](ROADMAP.md). Inline summary (kept in sync manually with [skill/README.md](skill/README.md)):
+
+- [x] `SKILL.md` — interview prompts, checklist categories, decision rules.
+- [x] `validators/` — twelve deterministic checks plus aggregated reporting.
+- [x] `orchestrator/` — SCAD intent-annotation parser + render-then-validate pipeline.
+- [x] `slicer/` — PrusaSlicer CLI invocation with per-material profiles.
+- [x] `transport/` — Marlin/Klipper line-numbered streamer over USB serial.
+- [x] End-to-end smoke test against real OpenSCAD.
+- [x] End-to-end smoke test against real PrusaSlicer (2026-05-03).
+- [x] First print on a real Marlin/Klipper printer over USB (2026-05-03, Ender-3 S1 Pro).
+- [ ] M105 keepalive thread in the streamer.
+- [ ] Per-part STL slicing so co-printed mating parts don't fuse.
+- [ ] Calibration-print routine for FDM clearance values.
+- [ ] Vision-augmented stage-3 secondary check.
+
 ## For skill consumers
 
 See [skill/README.md](skill/README.md) and [skill/SKILL.md](skill/SKILL.md).
