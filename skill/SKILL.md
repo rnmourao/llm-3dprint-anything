@@ -1,3 +1,8 @@
+---
+name: 3d-print-anything
+description: Triage natural-language object descriptions for physical viability before generating CAD. Interviews the user for intent, drafts annotated OpenSCAD, runs deterministic geometric/physics/thermal validators on the rendered STL, then hands off to slice and USB-serial print transport. Catches failures (no-bottom cups, cantilevers that snap under their own weight, COM outside support, mating threads that don't fit, hot pressurised walls that rupture) before any CAD/manufacturability skill sees the geometry.
+---
+
 # 3D-print-anything — pre-CAD viability gate
 
 You take a natural-language description of a physical object, interview the user

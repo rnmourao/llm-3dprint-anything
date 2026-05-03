@@ -2,19 +2,44 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Repository layout (deploy-vs-dev split)
+
+The repo is split into the **deployable skill bundle** under [skill/](skill/) and **dev-only** content at the root. Anything that ships to a skill consumer lives under `skill/`; anything used only for development, testing, or background research lives at the root.
+
+```
+skill/                      ← what the skill bundle ships
+  SKILL.md                  ← LLM-facing rule book (with YAML frontmatter)
+  README.md                 ← skill marketplace page / public docs
+  requirements.txt          ← runtime Python deps
+  validators/               ← 12 deterministic checks
+  orchestrator/             ← pipeline that composes them
+  slicer/                   ← PrusaSlicer CLI wrapper
+  transport/                ← Marlin/Klipper streamer
+  examples/                 ← canonical SCAD designs
+
+CLAUDE.md                   ← this file (dev guidance)
+README.md                   ← thin pointer to skill/README.md + dev quickstart
+requirements-dev.txt        ← runtime deps + pytest
+conftest.py                 ← puts skill/ on sys.path for tests
+tests/                      ← pytest suite
+studies/                    ← background research justifying the LLM-vs-tool split
+scripts/                    ← dev utilities (smoke print, video recorder)
+scratch/                    ← run outputs (gitignored)
+```
+
 ## Repository status
 
-End-to-end pipeline implemented except the final hardware handoff. 191/191 tests pass. Real OpenSCAD drives Stages 1–3 against the smoke-test design ([examples/peg_in_hole.scad](examples/peg_in_hole.scad)); stages 4 (PrusaSlicer slice) and 5 (USB Marlin transport) are implemented with pluggable backends but the real binaries / real printer have not been exercised. See [README.md](README.md) for the public-facing description and the full Pending list.
+End-to-end pipeline ran successfully on real hardware on 2026-05-03 (Ender-3 S1 Pro, full peg-in-hole print). 196/196 tests pass. See [skill/README.md](skill/README.md) for the public description.
 
 ### Commands
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # one-time
-.venv/bin/pytest tests/                                              # full suite (~1 s)
-.venv/bin/pytest tests/test_mesh.py -v                               # one module verbose
-.venv/bin/python -c "from pathlib import Path; from orchestrator import run_pipeline; \
-    print(run_pipeline(Path('examples/peg_in_hole.scad'), \
-                       work_dir=Path('scratch/smoke')).to_text())"   # live smoke test
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # one-time (runtime + pytest)
+.venv/bin/pytest tests/                                                  # full suite (~1 s)
+.venv/bin/pytest tests/test_mesh.py -v                                   # one module verbose
+PYTHONPATH=skill .venv/bin/python -c "from pathlib import Path; from orchestrator import run_pipeline; \
+    print(run_pipeline(Path('skill/examples/peg_in_hole.scad'), \
+                       work_dir=Path('scratch/smoke')).to_text())"       # live smoke test
 ```
 
 ## What this project is
@@ -37,7 +62,7 @@ When adding a new check, decide its owner using this split — and keep the spli
 
 | Check type | Owner | Tool |
 |---|---|---|
-| Functional coherence (interview-style) | LLM | Checklist questioning in [SKILL.md](SKILL.md) |
+| Functional coherence (interview-style) | LLM | Checklist questioning in [skill/SKILL.md](skill/SKILL.md) |
 | Scale / proportion sanity | LLM | Lookup-table heuristics |
 | Mesh integrity (non-manifold, watertight) | Tool | `validators.check_mesh_integrity` |
 | Interpenetration of described volumes | Tool | `validators.check_hard_clash` |
@@ -59,29 +84,26 @@ The "fit vs. hold" split (interference checking and structural analysis are sepa
 
 OpenSCAD, PrusaSlicer, MuJoCo, pyserial — each is wrapped behind a `Renderer` / `Slicer` / `Simulator` / `Transport` callable, with a `default_*` production impl and tests that inject fakes. This pattern lets unit tests run without the binary installed and lets future contributors swap engines (CuraEngine instead of PrusaSlicer; Bullet instead of MuJoCo) without touching the validator core. **Preserve this when adding a new external dependency.**
 
-## Directory layout
+## Module pointers (all under skill/)
 
-All directories below are implemented:
-
-- [SKILL.md](SKILL.md) — LLM-facing rule book. Interview script, OpenSCAD intent-annotation grammar, render-then-verify orchestration, deterministic-vs-`[INFER]` reporting discipline.
-- [validators/](validators/) — twelve deterministic checks, single-source material data ([validators/materials.py](validators/materials.py)), report aggregation. Each check returns `Verdict` objects with stable rule keys; `validators.aggregate(...)` combines them into a `Report` the LLM surfaces verbatim.
-- [orchestrator/](orchestrator/) — parses SCAD intent annotations ([orchestrator/annotations.py](orchestrator/annotations.py)), renders modules to STL via real OpenSCAD, drives the validator sequence ([orchestrator/pipeline.py](orchestrator/pipeline.py)). Pluggable renderer + simulator parameters for testing.
-- [slicer/](slicer/) — PrusaSlicer CLI wrapper ([slicer/cli.py](slicer/cli.py)) with per-material profiles ([slicer/profile.py](slicer/profile.py)).
-- [transport/](transport/) — Marlin/Klipper line-numbered protocol with checksum ([transport/protocol.py](transport/protocol.py)) + streaming machine ([transport/streamer.py](transport/streamer.py)). Pluggable Transport (pyserial-backed `SerialTransport` or fake).
-- [tests/](tests/) — pytest, one file per validator/orchestrator/slicer/transport module. Run from repo root.
-- [studies/](studies/) — discipline research (BIM, mechanical fits, mesh/collision, LLM benchmarks, synthesis) that justifies the LLM-vs-tool split. **Read the matching study before changing a validator.**
-- [examples/](examples/) — canonical SCAD designs that exercise the pipeline. Currently: `peg_in_hole.scad`.
+- [skill/SKILL.md](skill/SKILL.md) — LLM-facing rule book. Interview script, OpenSCAD intent-annotation grammar, render-then-verify orchestration, deterministic-vs-`[INFER]` reporting discipline. Has YAML frontmatter for skill packaging.
+- [skill/validators/](skill/validators/) — twelve deterministic checks, single-source material data ([skill/validators/materials.py](skill/validators/materials.py)), report aggregation. Each check returns `Verdict` objects with stable rule keys; `validators.aggregate(...)` combines them into a `Report` the LLM surfaces verbatim.
+- [skill/orchestrator/](skill/orchestrator/) — parses SCAD intent annotations ([skill/orchestrator/annotations.py](skill/orchestrator/annotations.py)), renders modules to STL via real OpenSCAD, drives the validator sequence ([skill/orchestrator/pipeline.py](skill/orchestrator/pipeline.py)). Pluggable renderer + simulator parameters for testing.
+- [skill/slicer/](skill/slicer/) — PrusaSlicer CLI wrapper ([skill/slicer/cli.py](skill/slicer/cli.py)) with per-material profiles ([skill/slicer/profile.py](skill/slicer/profile.py)).
+- [skill/transport/](skill/transport/) — Marlin/Klipper line-numbered protocol with checksum ([skill/transport/protocol.py](skill/transport/protocol.py)) + streaming machine ([skill/transport/streamer.py](skill/transport/streamer.py)). Pluggable Transport (pyserial-backed `SerialTransport` or fake).
+- [skill/examples/](skill/examples/) — canonical SCAD designs that exercise the pipeline (peg_in_hole, lamp_stand, pressure_bottle, slender_antenna_post, press_fit_insert, wall_mount_bracket).
+- [tests/](tests/) — pytest, one file per validator/orchestrator/slicer/transport module. Run from repo root; `conftest.py` puts `skill/` on sys.path so test imports stay short (`from validators import ...`).
+- [studies/](studies/) — discipline research (BIM, mechanical fits, mesh/collision, LLM benchmarks, synthesis) that justifies the LLM-vs-tool split. Dev-only. **Read the matching study before changing a validator.**
 
 ## Hardware / output target
 
-- Printer transport: **USB serial**, Marlin / Klipper-flavored G-code, line-numbered with checksum, `M105` heartbeat for keepalive. The protocol is implemented in `transport/`; the M105 keepalive thread is documented as a v1 limitation in [transport/streamer.py](transport/streamer.py) and is open future work.
-- Slicer: **PrusaSlicer CLI** (headless). Implemented in `slicer/`; the binary itself has not been installed/run during development (the brew cask install was declined as out-of-scope when offered during a smoke test).
+- Printer transport: **USB serial**, Marlin / Klipper-flavored G-code, line-numbered with checksum. Protocol in [skill/transport/](skill/transport/). M105 keepalive thread is documented as a v1 limitation in [skill/transport/streamer.py](skill/transport/streamer.py); long-blocking M109/M190/M191 acks now use `long_block_timeout_s` (default 600 s) so they no longer time out waiting for cold heaters.
+- Slicer: **PrusaSlicer CLI** (headless). Implemented in [skill/slicer/](skill/slicer/). Verified end-to-end against the real binary on 2026-05-03; `SliceProfile` carries explicit first-layer temperature fields so PrusaSlicer never emits `S0` for layer 1.
 
-## Pending (full list in README.md)
+## Pending
 
-- Connect to a real printer (user said "soon"). Until then the streamer's only contact with the world is its programmable fake transport.
-- Run real PrusaSlicer (binary install pending).
-- v1 limitations documented in module docstrings — read the docstring before extending: `check_grounded` doesn't model part-on-part support; `check_settles_under_gravity` uses convex-hull collision; `check_cantilever`/`check_buckling`/`check_pressure_vessel` are closed-form back-of-envelope rather than FEA; `check_operating_temperature` is a static lookup. These are intentional v1 boundaries — extending them belongs in a sibling module (`validators/fea.py`) per [study 02](studies/02-tolerance-and-fits.md)'s fit-vs-hold split, not by overloading the existing checks.
+- v1 limitations documented in module docstrings — read the docstring before extending: `check_grounded` doesn't model part-on-part support; `check_settles_under_gravity` uses convex-hull collision; `check_cantilever`/`check_buckling`/`check_pressure_vessel` are closed-form back-of-envelope rather than FEA; `check_operating_temperature` is a static lookup. These are intentional v1 boundaries — extending them belongs in a sibling module (`skill/validators/fea.py`) per [study 02](studies/02-tolerance-and-fits.md)'s fit-vs-hold split, not by overloading the existing checks.
+- Multi-part slicing: today the orchestrator hands a single unioned `assembly.stl` to PrusaSlicer, so multi-part designs print as one piece. Future work: feed per-part STLs and let PrusaSlicer arrange them on the bed, with each part's print orientation validated against gravity stability AND support-economy.
 
 ## Downstream skills to integrate, not reimplement
 

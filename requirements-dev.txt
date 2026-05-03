@@ -1,0 +1,2 @@
+-r skill/requirements.txt
+pytest>=7.0
