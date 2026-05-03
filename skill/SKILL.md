@@ -172,6 +172,127 @@ lex-sorted.
 - No magic numbers without an accompanying comment explaining the choice
   (a wall thickness of 1.6 mm at 0.4 mm nozzle is "4 perimeters"; document it).
 
+### Worked examples
+
+Three canonical user-prompt → annotated-SCAD pairs covering the most common
+annotation combinations. Match the closest pattern when drafting Stage 2 output.
+
+#### Example A — Mating parts (fit annotation)
+
+> **User:** "I want a small peg that slides through a hole in a flat plate.
+> Both PLA. Peg should be about 6 mm wide so I can grip it."
+
+```scad
+// part: peg
+// part: socket
+// fit: peg~socket class=LC
+// gravity: -z
+
+peg_diameter   = 6;
+peg_height     = 14;
+hole_diameter  = peg_diameter + 0.50;   // LC = 0.20–0.30 mm radial gap
+plate_size     = 30;
+plate_thickness = 6;
+
+module peg() {
+    // Modelled at final assembly position (axis +z, on the bed).
+    cylinder(h=peg_height, d=peg_diameter, $fn=64);
+}
+
+module socket() {
+    difference() {
+        translate([-plate_size / 2, -plate_size / 2, 0])
+            cube([plate_size, plate_size, plate_thickness]);
+        translate([0, 0, -0.1])
+            cylinder(h=plate_thickness + 0.2, d=hole_diameter, $fn=64);
+    }
+}
+
+module assembly() { peg(); socket(); }
+assembly();
+```
+
+Fires: `clearance:peg~socket`, `hard_clash:peg~socket`, `mesh_*`, `stability_*`,
+`physics_settles:*`. The fit class drives the gap range — pick `LC` for slip-fit,
+`RC` for rotating, `FN` for press-fit (see Stage 1.2).
+
+#### Example B — Pressure + temperature (single part)
+
+> **User:** "A small water bottle, PLA, thin walls, holds water at 70 °C
+> and around 6 bar internal pressure."
+
+```scad
+// part: bottle
+// gravity: -z
+// operating: temp_c=70
+// pressure: part=bottle internal_pa=600000 wall_thickness_mm=1 radius_mm=50 material=PLA
+
+inner_radius   = 50;
+wall_thickness = 1;
+height         = 100;
+
+module bottle() {
+    difference() {
+        cylinder(h=height, r=inner_radius + wall_thickness, $fn=128);
+        // Cavity stops short of top/bottom so the mesh stays watertight.
+        translate([0, 0, wall_thickness])
+            cylinder(h=height - 2 * wall_thickness, r=inner_radius, $fn=128);
+    }
+}
+
+module assembly() { bottle(); }
+assembly();
+```
+
+Fires: `pressure_vessel_hoop:bottle`, `operating_temperature:bottle`, plus
+the standard mesh / stability checks. PLA at 70 °C is past Tg → expect a BLOCK.
+For pressurised vessels you almost always need `pressure:` AND `operating:` —
+hoop stress is meaningless without the temperature that sets the material's
+allowable stress.
+
+#### Example C — Slender column (buckling)
+
+> **User:** "A vertical antenna post, 4 mm diameter, 200 mm tall, PLA,
+> supporting a 50 N load on top."
+
+```scad
+// part: post
+// gravity: -z
+// buckling: part=post axial_n=50 length_mm=200 section=round:4 material=PLA end_condition=fixed-free
+
+post_diameter = 4;
+post_height   = 200;
+
+module post() {
+    cylinder(h=post_height, d=post_diameter, $fn=64);
+}
+
+module assembly() { post(); }
+assembly();
+```
+
+Fires: `column_buckling:post` (BLOCK at this slenderness — Euler's formula
+catches the failure mode that pure-yield checks miss; 50 N on a 4 mm rod is
+far below PLA's ~50 MPa yield, but the post buckles long before yielding).
+Use `buckling:` for any slender member loaded along its long axis; use
+`load:` (cantilever) for transverse loads on a beam.
+
+### Picking the right annotation
+
+| User says… | Annotation | Validator |
+|---|---|---|
+| "X fits inside Y" / "slides through" | `// fit: x~y class=…` | `check_clearance` |
+| "stands on a base" / "tips over?" | `// gravity: -z` (always) | `check_static_stability` + grounded |
+| "tall thin column under load" | `// buckling: part=… axial_n=…` | `check_buckling` |
+| "shelf bracket / arm carrying weight" | `// load: part=… force=… length_mm=… section=…` | `check_cantilever` |
+| "pressurised / contains gas / liquid under pressure" | `// pressure: part=… internal_pa=… wall_thickness_mm=… radius_mm=…` | `check_pressure_vessel` |
+| "operates at temperature" | `// operating: temp_c=…` | `check_operating_temperature` (per part) |
+| "two parts overlap on purpose" | `// clash_whitelist: a~b` | suppresses `check_hard_clash` |
+
+If the prompt mentions any of these, emit the matching annotation. Don't omit
+annotations because the geometry "looks safe" — the whole point of Stage 3 is
+that the LLM can't tell from looking.
+
 ## Stage 3 — Geometric validation (tools own this)
 
 The orchestrator runs the validators in the prescribed order; you do not call
