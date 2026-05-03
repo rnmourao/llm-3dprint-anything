@@ -14,8 +14,11 @@ Sequence:
        - On Ok, advance.
 
 v1 limitations (documented; not silently broken):
-    * No M105 keepalive thread. Long blocking moves rely on response_timeout_s.
-      The README's "M105 heartbeat" requirement is future work.
+    * No M105 keepalive thread. The README's "M105 heartbeat" requirement
+      is future work. Block-until-temperature commands (M109/M190/M191)
+      get a separate `long_block_timeout_s` (default 600 s) so they don't
+      time out waiting for cold heaters; everything else uses the tighter
+      `response_timeout_s` (default 30 s).
     * No flow control beyond the per-line ack. Marlin/Klipper's own buffer
       is the only smoothing; for high-throughput streaming, this matters.
     * No pause/resume. Streaming is a single blocking call.
@@ -62,11 +65,19 @@ class StreamResult:
     elapsed_s: float = 0.0
 
 
+# Marlin's block-until-temperature commands hold the ack until the heater
+# reaches setpoint — minutes from cold, not seconds. Keep them out of the
+# generic per-move timeout so a 30 s ceiling on actual moves still works.
+_LONG_BLOCK_OPCODES: tuple[str, ...] = ("M109", "M190", "M191")
+
+
 def stream_gcode(
     gcode_path: Path,
     transport: Transport,
     *,
     response_timeout_s: float = 30.0,
+    long_block_timeout_s: float = 600.0,
+    long_block_opcodes: tuple[str, ...] = _LONG_BLOCK_OPCODES,
     max_resends: int = 3,
     history_size: int = 32,
     on_progress: Optional[Callable[[Progress], None]] = None,
@@ -90,9 +101,9 @@ def stream_gcode(
         transport.write_line(wire)
         return wire
 
-    def _await_response() -> tuple[str, object]:
+    def _await_response(timeout_s: float) -> tuple[str, object]:
         """Read until we get a definitive Ok / Resend / Error response."""
-        deadline = time.monotonic() + response_timeout_s
+        deadline = time.monotonic() + timeout_s
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -105,11 +116,15 @@ def stream_gcode(
                 continue  # echo / temperature / banner — keep reading
             return line, parsed
 
+    def _timeout_for(gcode: str) -> float:
+        head = gcode.split(None, 1)[0].upper() if gcode else ""
+        return long_block_timeout_s if head in long_block_opcodes else response_timeout_s
+
     start = time.monotonic()
 
     # 1. Line-counter reset
     _send_numbered(0, "M110 N0")
-    raw, parsed = _await_response()
+    raw, parsed = _await_response(response_timeout_s)
     if parsed is None:
         return StreamResult(0, total, False, "timeout waiting for ack of M110 reset",
                             time.monotonic() - start)
@@ -125,8 +140,9 @@ def stream_gcode(
         if on_progress is not None:
             on_progress(Progress(lines_sent=lines_sent, total_lines=total, current_gcode=gcode))
 
+        ack_timeout = _timeout_for(gcode)
         while True:
-            raw, parsed = _await_response()
+            raw, parsed = _await_response(ack_timeout)
             if parsed is None:
                 return StreamResult(
                     lines_sent, total, False,

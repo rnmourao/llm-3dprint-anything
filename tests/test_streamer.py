@@ -177,3 +177,68 @@ def test_empty_gcode_succeeds(tmp_path):
     assert result.completed is True
     assert result.lines_sent == 0
     assert result.total_lines == 0
+
+
+# ----- long-block ack timeout -----
+
+
+class SlowTransport:
+    """Per-response delay queue. Each entry is (delay_s_before_response, response_string)."""
+
+    def __init__(self, responses: list[tuple[float, Optional[str]]]) -> None:
+        import time as _time
+        self._time = _time
+        self.responses = list(responses)
+        self.sent: list[str] = []
+        self._next_ready = _time.monotonic()
+
+    def write_line(self, line: str) -> None:
+        self.sent.append(line)
+        # Arm the next response delay relative to this write.
+        if self.responses:
+            delay, _ = self.responses[0]
+            self._next_ready = self._time.monotonic() + delay
+
+    def read_line(self, *, timeout_s=None):
+        if not self.responses:
+            return None
+        wait = self._next_ready - self._time.monotonic()
+        if timeout_s is not None and wait > timeout_s:
+            self._time.sleep(max(0.0, timeout_s))
+            return None
+        if wait > 0:
+            self._time.sleep(wait)
+        _, resp = self.responses.pop(0)
+        return resp
+
+    def close(self) -> None:
+        pass
+
+
+def test_long_block_opcode_uses_long_timeout(tmp_path):
+    """M190's ack legitimately takes longer than response_timeout_s —
+    long_block_timeout_s must cover it."""
+    gcode = _gcode_file(tmp_path, ["M190 S60", "G1 X10"])
+    # M110 acks fast (0 s); M190 holds for 0.15 s; G1 acks fast.
+    transport = SlowTransport([(0.0, "ok"), (0.15, "ok"), (0.0, "ok")])
+    result = stream_gcode(
+        gcode, transport,
+        response_timeout_s=0.05,
+        long_block_timeout_s=2.0,
+    )
+    assert result.completed is True
+    assert result.lines_sent == 2
+
+
+def test_short_timeout_still_aborts_normal_moves(tmp_path):
+    """A regular G1 that doesn't ack within response_timeout_s must time out
+    even when long_block_timeout_s is generous."""
+    gcode = _gcode_file(tmp_path, ["G1 X10"])
+    transport = SlowTransport([(0.0, "ok"), (0.20, "ok")])
+    result = stream_gcode(
+        gcode, transport,
+        response_timeout_s=0.05,
+        long_block_timeout_s=10.0,
+    )
+    assert result.completed is False
+    assert "timeout" in result.error.lower()
