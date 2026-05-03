@@ -11,7 +11,8 @@ For each `examples/*.scad` we:
   3. Step MuJoCo for `duration_s`, snapshotting every Nth frame via
      `mujoco.Renderer`, and write the frames out as a GIF with Pillow.
 
-Outputs land under `scratch/videos/`. The `scratch/` directory is gitignored.
+Outputs land under `skill/examples/videos/` so they ship with the
+skill bundle and are picked up by the README.
 
 Usage:
     .venv/bin/python scripts/record_gravity_videos.py
@@ -26,7 +27,7 @@ from pathlib import Path
 
 # Allow `python scripts/record_gravity_videos.py` to import the project's
 # packages without requiring an editable install — same pattern as conftest.py.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "skill"))
 
 import mujoco
 import numpy as np
@@ -37,8 +38,8 @@ from orchestrator import parse_annotations
 from orchestrator.pipeline import RenderRequest, default_renderer
 
 REPO = Path(__file__).resolve().parent.parent
-EXAMPLES = REPO / "examples"
-OUT_DIR = REPO / "scratch" / "videos"
+EXAMPLES = REPO / "skill" / "examples"
+OUT_DIR = EXAMPLES / "videos"
 
 DURATION_S = 2.0
 TIMESTEP = 0.002        # match validators.physics.default_simulator
